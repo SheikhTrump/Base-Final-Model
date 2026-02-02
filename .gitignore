@@ -1,0 +1,37 @@
+# Virtual Environment
+vevn/
+venv/
+env/
+.venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+sim_log.txt
+sim_log_v2.txt
+sim_output.txt
+sim_final.txt
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Environment files
+.env
+.env.local
