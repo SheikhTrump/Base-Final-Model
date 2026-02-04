@@ -3,7 +3,7 @@ import torch.nn as nn
 from collections import OrderedDict
 
 class CropLSTM(nn.Module):
-    def __init__(self, input_size=6, hidden_size=64, num_layers=2, num_classes=6):
+    def __init__(self, input_size=6, hidden_size=64, num_layers=1, num_classes=16):
         super(CropLSTM, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -20,8 +20,9 @@ class CropLSTM(nn.Module):
         self.fc2 = nn.Linear(128, 64)
         self.dropout2 = nn.Dropout(0.4)
         
-        # Output layer: 6 units for 6-class crop classification
-        # (Paper's Table II specifies 2 output units, but dataset contains 6 crops: rice, maize, cassava, seed_cotton, yams, bananas)
+        # Output layer: 16 units for ALL crops in dataset (varies by district)
+        # Paper shows each district uses subset of crops (7-12 crops per district)
+        # Global model uses all 16 crops for FedAvg compatibility
         self.fc3 = nn.Linear(64, num_classes)
         
     def forward(self, x):
@@ -65,14 +66,32 @@ def train(net, trainloader, optimizer, epochs, device):
             loss.backward()
             optimizer.step()
 
-def test(net, testloader, device):
-    """Validate the network on the entire test set."""
+def test(net, testloader, device, crop_names=None):
+    """Validate the network on the entire test set.
+    
+    Parameters:
+    -----------
+    net : CropLSTM
+        The model to test
+    testloader : DataLoader
+        Test data loader
+    device : torch.device
+        Device to run on (CPU or GPU)
+    crop_names : list, optional
+        List of crop names for this district (if None, uses all 16 global crops)
+    """
     criterion = torch.nn.CrossEntropyLoss()
     loss = 0.0
     net.eval()
     
     # Calculate additional metrics
     from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
+    
+    # Default to all 16 crops if not specified
+    if crop_names is None:
+        crop_names = ["Sugarcane", "Jowar", "Cotton", "Rice", "Wheat", "Groundnut", 
+                     "Maize", "Tur", "Urad", "Moong", "Gram", "Masoor", 
+                     "Soybean", "Ginger", "Turmeric", "Grapes"]
     
     all_preds = []
     all_labels = []
@@ -86,8 +105,26 @@ def test(net, testloader, device):
             all_labels.extend(labels.cpu().numpy())
             
     accuracy = accuracy_score(all_labels, all_preds)
-    f1 = f1_score(all_labels, all_preds, average='weighted')
+    f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
     precision = precision_score(all_labels, all_preds, average='weighted', zero_division=0)
     recall = recall_score(all_labels, all_preds, average='weighted', zero_division=0)
+    
+    # Print predictions with crop names (show first 20)
+    print(f"\n  Predictions Summary (District-specific crops):")
+    print(f"  {'-' * 90}")
+    for i, (actual, pred) in enumerate(zip(all_labels[:20], all_preds[:20])):  # Print first 20
+        if int(actual) < len(crop_names):
+            actual_name = crop_names[int(actual)]
+        else:
+            actual_name = f"Unknown({actual})"
+        if int(pred) < len(crop_names):
+            pred_name = crop_names[int(pred)]
+        else:
+            pred_name = f"Unknown({pred})"
+        match = "✓" if actual == pred else "✗"
+        print(f"    [{i+1:2d}] Actual: {actual_name:15s} | Predicted: {pred_name:15s} | {match}")
+    if len(all_labels) > 20:
+        print(f"    ... and {len(all_labels) - 20} more samples")
+    print(f"  {'-' * 90}\n")
     
     return loss, accuracy, f1, precision, recall

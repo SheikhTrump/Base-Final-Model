@@ -55,11 +55,12 @@ from Crypto.Random import get_random_bytes
 
 # Define Flower client
 class FlowerClient(fl.client.NumPyClient):
-    def __init__(self, cid, net, trainloader, testloader):
+    def __init__(self, cid, net, trainloader, testloader, crop_names=None):
         self.cid = cid
         self.net = net
         self.trainloader = trainloader
         self.testloader = testloader
+        self.crop_names = crop_names  # District-specific crop names
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.net.to(self.device)
 
@@ -113,13 +114,28 @@ class FlowerClient(fl.client.NumPyClient):
             self.last_enc_time = 0.0
             self.last_dec_time = 0.0
         
-        train(self.net, self.trainloader, torch.optim.Adam(self.net.parameters(), lr=0.001), epochs=5, device=self.device)
-        return get_parameters(self.net), len(self.trainloader.dataset), {}
+        epochs = int(config.get("local_epochs", 5))
+        train(self.net, self.trainloader, torch.optim.Adam(self.net.parameters(), lr=0.001), epochs=epochs, device=self.device)
+        
+        # Evaluate on local test set to report metrics during fit (for custom strategy)
+        loss, accuracy, f1, precision, recall = test(self.net, self.testloader, device=self.device, crop_names=self.crop_names)
+        
+        print(f"[Client {self.cid}] Local Accuracy: {accuracy*100:.2f}% | Local F1: {f1:.4f}")
+
+        metrics = {
+            "accuracy": float(accuracy),
+            "f1": float(f1),
+            "enc_time": getattr(self, "last_enc_time", 0.0),
+            "dec_time": getattr(self, "last_dec_time", 0.0),
+            "data_enc_time": getattr(self, "last_data_enc_time", 0.0)
+        }
+        
+        return get_parameters(self.net), len(self.trainloader.dataset), metrics
 
     def evaluate(self, parameters, config):
         print(f"[Client {self.cid}] evaluate, config: {config}")
         set_parameters(self.net, parameters)
-        loss, accuracy, f1, precision, recall = test(self.net, self.testloader, device=self.device)
+        loss, accuracy, f1, precision, recall = test(self.net, self.testloader, device=self.device, crop_names=self.crop_names)
         print(f"[Client {self.cid}] acc: {accuracy:.4f}, f1: {f1:.4f}")
         return float(loss), len(self.testloader.dataset), {
             "accuracy": float(accuracy),
@@ -145,5 +161,8 @@ def client_fn(cid: str, partitions, device):
     
     trainloader = DataLoader(trainset, batch_size=32, shuffle=True)
     testloader = DataLoader(testset, batch_size=32)
+    
+    # Pass district-specific crop names
+    crop_names = partition.get('crop_names', None)
 
-    return FlowerClient(cid, net, trainloader, testloader)
+    return FlowerClient(cid, net, trainloader, testloader, crop_names=crop_names)

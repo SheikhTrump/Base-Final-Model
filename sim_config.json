@@ -1,0 +1,71 @@
+{
+    "simulation": {
+        "framework": "Flower Federated Learning",
+        "tensorflow_version": "2.3.0",
+        "cuda_version": "11.0",
+        "num_rounds": 15,
+        "num_clients": 4
+    },
+    "cloud_server": {
+        "role": "global_aggregator",
+        "name": "Cloud Server",
+        "ram": "16GB",
+        "storage": "2TB HDD",
+        "processor": "Intel Xeon ES-26670 @2.90GHz HexaCore"
+    },
+    "edge_servers": [
+        {
+            "client_id": 1,
+            "role": "edge_client",
+            "name": "Edge Server 1",
+            "ram": "16GB",
+            "storage": "1TB HDD",
+            "processor": "Intel Xeon E5-26670 @2.90GHz OctaCore",
+            "local_epochs": 5,
+            "batch_size": 32
+        },
+        {
+            "client_id": 2,
+            "role": "edge_client",
+            "name": "Edge Server 2",
+            "ram": "16GB",
+            "storage": "1TB HDD",
+            "processor": "Intel Xeon E5-26670 @2.90GHz OctaCore",
+            "local_epochs": 5,
+            "batch_size": 32
+        },
+        {
+            "client_id": 3,
+            "role": "edge_client",
+            "name": "Edge Server 3",
+            "ram": "16GB",
+            "storage": "1TB HDD",
+            "processor": "Intel Xeon E5-26670 @2.90GHz OctaCore",
+            "local_epochs": 5,
+            "batch_size": 32
+        },
+        {
+            "client_id": 4,
+            "role": "edge_client",
+            "name": "Edge Server 4",
+            "ram": "16GB",
+            "storage": "1TB HDD",
+            "processor": "Intel Xeon E5-26670 @2.90GHz OctaCore",
+            "local_epochs": 5,
+            "batch_size": 32
+        }
+    ],
+    "network": {
+        "uplink_mbps": 5,
+        "downlink_mbps": 10,
+        "latency_ms": 50,
+        "packet_loss": 0.01
+    },
+    "flower_settings": {
+        "strategy": "FedAvg",
+        "fraction_fit": 1.0,
+        "fraction_evaluate": 1.0,
+        "min_fit_clients": 4,
+        "min_available_clients": 4
+    }
+}

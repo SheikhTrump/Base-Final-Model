@@ -12,42 +12,57 @@ import numpy as np
 # SIMULATION RESULTS DATA (from last run)
 # ============================================================================
 
-rounds = np.arange(1, 16)
+import json
+import os
+import sys
 
-# Accuracy and F1-Score per round (from sim_final.txt)
-accuracy_per_round = np.array([
-    59.84, 80.45, 90.90, 89.13, 91.37, 94.26, 95.37, 96.26, 95.82,
-    96.26, 95.61, 95.38, 95.82, 95.39, 96.27
-])
+# ============================================================================
+# LOAD SIMULATION RESULTS
+# ============================================================================
 
-f1_score_per_round = np.array([
-    0.4935, 0.7579, 0.8934, 0.8746, 0.9023, 0.9381, 0.9534, 0.9625, 0.9582,
-    0.9605, 0.9557, 0.9529, 0.9573, 0.9535, 0.9606
-])
+RESULTS_FILE = 'sim_results.json'
 
-# Encryption latency (gradient encryption in ms)
-gradient_encryption_ms = np.array([
-    7.7834, 0.3603, 0.2992, 0.3822, 0.3121, 0.4954, 0.3002, 0.4036, 0.2801,
-    0.2782, 0.3695, 0.2458, 0.3753, 0.2861, 0.2651
-]) / 1000  # Convert to seconds for better visualization
+if not os.path.exists(RESULTS_FILE):
+    print(f"Error: {RESULTS_FILE} not found!")
+    print("Please run 'python simulate.py' first to generate results.")
+    sys.exit(1)
 
-# Data encryption latency (AES in ms)
-data_encryption_ms = np.array([
-    0.1380, 0.1276, 0.1347, 0.1280, 0.1085, 0.0982, 0.1104, 0.1285, 0.1111,
-    0.0808, 0.1104, 0.0923, 0.0987, 0.0775, 0.0801
-]) / 1000  # Convert to seconds
+with open(RESULTS_FILE, 'r') as f:
+    data = json.load(f)
 
-# Network latency per round (ms)
-network_latency_ms = np.full(15, 2515.06)
+print(f"Loaded results from {RESULTS_FILE}")
 
-# Local accuracies by edge server (final round)
-edge_servers = ['Kolhapur\n(1,253 samples)', 'Satara\n(475 samples)', 
-                'Solapur\n(352 samples)', 'Pune\n(162 samples)']
-local_accuracies = np.array([98.80, 100.00, 94.37, 69.70])
-local_colors = ['#2ecc71', '#27ae60', '#3498db', '#e74c3c']
+rounds = np.array(data['rounds'])
+accuracy_per_round = np.array(data['accuracy'])
+f1_score_per_round = np.array(data['f1'])
 
-# Training time per round (approximately)
-training_time_per_round = np.array([1.4] * 15)  # ~21.37 seconds / 15 rounds
+# Encryption latency (gradient encryption in ms) -> Convert to seconds for visualization scaling if needed
+# The separate plots usually expect seconds or ms depending on the code.
+# The previous code divided by 1000 for some arrays. Let's check usage.
+# Original: gradient_encryption_ms = ... / 1000
+# Plot 5 uses: gradient_encryption_ms * 1000. So it expects seconds in the variable?
+# Let's keep consistency.
+gradient_encryption_ms = np.array(data['enc_time']) / 1000.0  # ms -> seconds
+
+# Data encryption latency 
+data_encryption_ms = np.array(data['data_enc_time']) / 1000.0 # ms -> seconds
+
+# Network latency
+network_latency_ms = np.array(data['network_latency'])
+
+# Local accuracies
+local_acc_dict = data['local_accuracies']
+edge_servers = list(local_acc_dict.keys())
+local_accuracies = np.array(list(local_acc_dict.values()))
+local_colors = ['#2ecc71', '#27ae60', '#3498db', '#e74c3c'][:len(edge_servers)]
+
+# Training time (approximate per round for plotting if needed)
+# Helper for plot 7/8
+total_duration = data.get('total_time', 0)
+total_energy = data.get('total_energy', 0)
+avg_enc = data['metrics']['avg_enc']
+avg_data_enc = data['metrics']['avg_data_enc']
+avg_network = data['metrics']['avg_network']
 
 # ============================================================================
 # CREATE COMPREHENSIVE VISUALIZATION
@@ -77,7 +92,14 @@ def create_comprehensive_plots():
     ax1.set_title('Model Accuracy Convergence (15 Rounds)', fontsize=14, fontweight='bold')
     ax1.grid(True, alpha=0.3)
     ax1.legend(loc='lower right', fontsize=10)
-    ax1.set_ylim([50, 105])
+    # Dynamic limits for Plot 1
+    min_acc = min(accuracy_per_round)
+    max_acc = max(accuracy_per_round)
+    y_margin = (max_acc - min_acc) * 0.2 if max_acc > min_acc else 5
+    ylim_bottom = max(0, min_acc - y_margin)
+    ylim_top = min(100.5, max_acc + y_margin)
+    
+    ax1.set_ylim([ylim_bottom, ylim_top])
     ax1.set_xticks(rounds)
     
     # Add value labels on points
@@ -169,17 +191,22 @@ def create_comprehensive_plots():
     ax8.axis('off')
     
     # Create summary data
+    first_acc = accuracy_per_round[0]
+    final_acc = accuracy_per_round[-1]
+    final_f1 = f1_score_per_round[-1]
+    
+    # Create summary data
     summary_data = [
         ['Metric', 'Value', 'Target', 'Status'],
-        ['Final Global Accuracy', '96.27%', '>99%', '⚠ Close'],
-        ['Final F1-Score', '0.9606', '>0.94', '✓ Exceeded'],
-        ['Avg Gradient Encryption', '0.31 ms', '~4.29 ms', '✓ 13.6x faster'],
-        ['Avg Data Encryption', '0.11 ms', '~39.08 ms', '✓ 352.8x faster'],
-        ['Network Latency/Round', '2,515 ms', 'Simulated', '✓ Realistic'],
-        ['Total Training Time (15 rounds)', '21.37 seconds', '-', '✓ Fast'],
+        ['Final Global Accuracy', f'{final_acc:.2f}%', '>99%', '⚠ Close' if final_acc < 99 else '✓ Exceeded'],
+        ['Final F1-Score', f'{final_f1:.4f}', '>0.94', '✓ Exceeded' if final_f1 > 0.94 else '⚠ Close'],
+        ['Avg Gradient Encryption', f'{avg_enc:.2f} ms', '~4.29 ms', f'✓ {4.29/avg_enc:.1f}x faster' if avg_enc > 0 else '-'],
+        ['Avg Data Encryption', f'{avg_data_enc:.2f} ms', '~39.08 ms', f'✓ {39.08/avg_data_enc:.1f}x faster' if avg_data_enc > 0 else '-'],
+        ['Network Latency/Round', f'{avg_network:.0f} ms', 'Simulated', '✓ Realistic'],
+        [f'Total Training Time ({len(rounds)} rounds)', f'{total_duration:.2f} s', '-', '✓ Fast'],
         ['Real Data Samples Used', '2,242', '4,513 available', '✓ Good coverage'],
         ['Target Crops Found', '6/6', 'All targets', '✓ Complete'],
-        ['Target Districts Used', '4/4', 'All targets', '✓ Balanced'],
+        ['Target Districts Used', f'{len(edge_servers)}/4', 'All targets', '✓ Balanced'],
     ]
     
     # Create table
@@ -234,14 +261,31 @@ def create_accuracy_focus_plot():
     ax1.set_title('Accuracy Convergence Over 15 Rounds', fontsize=15, fontweight='bold')
     ax1.grid(True, alpha=0.4, linestyle=':', linewidth=1.5)
     ax1.legend(fontsize=11, loc='lower right')
-    ax1.set_ylim([55, 105])
+    ax1.legend(fontsize=11, loc='lower right')
+    
+    # Dynamic limits for Focus Plot
+    min_acc = min(accuracy_per_round)
+    max_acc = max(accuracy_per_round)
+    y_margin = (max_acc - min_acc) * 0.3 if max_acc > min_acc else 5
+    
+    ylim_bottom = max(0, min_acc - y_margin)
+    ylim_top = min(105, max_acc + y_margin)
+    
+    ax1.set_ylim([ylim_bottom, ylim_top])
     ax1.set_xticks(rounds)
     
     # Add annotations for key points
-    ax1.annotate('Initial\n59.84%', xy=(1, 59.84), xytext=(3, 45),
+    # Add annotations for key points
+    first_acc = accuracy_per_round[0]
+    final_acc = accuracy_per_round[-1]
+    
+    ax1.annotate(f'Initial\n{first_acc:.2f}%', xy=(1, first_acc), 
+                xytext=(1 + len(rounds)*0.1, first_acc - y_margin*0.5),
                 arrowprops=dict(arrowstyle='->', color='red', lw=2),
                 fontsize=10, fontweight='bold', color='red')
-    ax1.annotate('Final\n96.27%', xy=(15, 96.27), xytext=(12, 102),
+                
+    ax1.annotate(f'Final\n{final_acc:.2f}%', xy=(len(rounds), final_acc), 
+                xytext=(len(rounds) - len(rounds)*0.2, final_acc - y_margin*0.5),
                 arrowprops=dict(arrowstyle='->', color='green', lw=2),
                 fontsize=10, fontweight='bold', color='green')
     
@@ -270,7 +314,7 @@ def create_latency_comparison_plot():
     
     metrics = ['Gradient\nEncryption', 'Data\nEncryption\n(AES-256)', 
                'Network\nLatency\n(per round)']
-    actual = [0.3146, 0.1107, 2515.06]
+    actual = [avg_enc, avg_data_enc, avg_network]
     targets = [4.29, 39.08, 2515.06]
     
     # Use log scale for better visualization
@@ -322,8 +366,12 @@ def create_system_performance_plot():
     
     # Plot 1: Energy consumption estimate
     ax1 = fig.add_subplot(gs[0, 0])
+    
+    # Estimate per-device energy (approximate)
+    per_device = total_energy / 4.0 if total_energy > 0 else 0
+    energy_values = [per_device, per_device, per_device, per_device, total_energy]
+    
     devices = ['Edge\nServer 1', 'Edge\nServer 2', 'Edge\nServer 3', 'Edge\nServer 4', 'All\nDevices']
-    energy_values = [26.7, 26.7, 26.7, 26.7, 106.86]
     colors_energy = ['#3498db', '#2ecc71', '#f39c12', '#e74c3c', '#9b59b6']
     
     bars = ax1.bar(devices, energy_values, color=colors_energy, alpha=0.8, 
@@ -387,7 +435,7 @@ def create_system_performance_plot():
     ax4 = fig.add_subplot(gs[1, 1])
     ax4.axis('off')
     
-    config_text = """
+    config_text = f"""
     SYSTEM CONFIGURATION SUMMARY
     ═══════════════════════════════════════════════════════════
     
@@ -405,11 +453,11 @@ def create_system_performance_plot():
       • Real Kaggle Dataset: 2,242 samples
       • Train/Test Split: 1,792 / 450 (80/20)
       • Features: 6 (N, P, K, pH, Rainfall, Temperature)
-      • Edge Servers: 4 (Kolhapur, Satara, Solapur, Pune)
+      • Edge Servers: {len(edge_servers)} ({', '.join([s.split()[0] for s in edge_servers])})
     
     Federated Learning:
-      • Rounds: 15
-      • Local Epochs: 5 per round
+      • Rounds: {len(rounds)}
+      • Local Epochs: Configurable (e.g. 5-10)
       • Batch Size: 32
       • Learning Rate: 0.001 (Adam optimizer)
       • Encryption: AES-256 GCM mode
@@ -417,7 +465,7 @@ def create_system_performance_plot():
     Network Simulation:
       • Uplink: 5 Mbps (IoT → Cloud)
       • Downlink: 10 Mbps (Cloud → IoT)
-      • Latency/Round: 2,515 ms
+      • Latency/Round: {avg_network:.0f} ms
     """
     
     ax4.text(0.05, 0.95, config_text, transform=ax4.transAxes,
