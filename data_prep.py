@@ -5,7 +5,9 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 import torch
 import os
 import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import seaborn as sns
+from imblearn.over_sampling import SMOTE, RandomOverSampler
 
 # ============================================================================
 # REAL KAGGLE DATASET LOADING
@@ -424,133 +426,236 @@ def perform_eda(df_kaggle, output_dir="."):
     print("="*70 + "\n")
 
 
-def get_partitions(num_clients=4, run_eda=False):
+def get_partitions(num_clients=5, run_eda=False):
     """
     Creates data partitions for federated learning across edge servers.
-    Paper specifies: 4 edge servers (Tier-III) + 1 cloud server (Tier-IV)
-    
-    KEY IMPROVEMENT: Each district uses ONLY the crops grown there (matches paper).
-    - Local Model 1: ~12 crops
-    - Local Model 2: ~7 crops
-    - Local Model 3: ~10 crops
-    - Local Model 4: ~10 crops
-    
-    Global model uses all 16 crops for FedAvg parameter averaging compatibility.
-    
-    AUTO-AGGREGATES ALL DISTRICTS INTO 4 CLIENTS:
-    - Detects all available districts from Kaggle dataset
-    - Groups them by sample size
-    - Assigns to 4 clients (largest districts get their own client, smaller ones are grouped)
-    # Try to load real Kaggle dataset
+    Strict Pipeline Implementation:
+    1. Load Raw CSV
+    2. Select numerical features & Standard Scaling (Global)
+    3. Label Encode Target (Global)
+    4. Split into 5 partitions district-wise
+    5. SMOTE/Balance to exactly 1000 samples per client
+    6. Reshape for LSTM
+    7. Save/Return partitions
     """
     print("\n" + "="*70)
-    print("LOADING AGRICULTURAL DATA")
+    print("STRICT DATA PIPELINE EXECUTION")
     print("="*70)
+    
+    # ---------------------------------------------------------
+    # 1. LOAD DATASET WITH PANDAS
+    # ---------------------------------------------------------
+    print("\n[STEP 1] Loading Raw CSV Dataset...")
     df_kaggle = load_kaggle_dataset()
     
     if df_kaggle is None:
-        # Using synthetic fallback
-        use_synthetic = True
-        print("Using SYNTHETIC data for demonstration (Kaggle dataset not found)")
-        districts_to_use = ['Kolhapur', 'Satara', 'Solapur', 'Pune']  # Default fallback
-        print("For real data, see instructions above.\n")
-    else:
-        use_synthetic = False
-        print("Using REAL data from Kaggle dataset\n")
+        print("[ERROR] Kaggle dataset not found. Cannot proceed with strict pipeline.")
+        return [], None
         
-        # PERFORM EXPLORATORY DATA ANALYSIS (Only if requested)
-        if run_eda:
-            perform_eda(df_kaggle)
+    if run_eda:
+        perform_eda(df_kaggle)
         
-        # AUTO-DETECT ALL UNIQUE DISTRICTS
-        all_districts = sorted(df_kaggle['District'].unique().tolist())
-        print(f"  Detected {len(all_districts)} unique districts: {all_districts}")
-        
-        # Group districts by sample count
-        district_counts = df_kaggle['District'].value_counts().sort_values(ascending=False)
-        print(f"  Sample distribution by district:")
-        for district, count in district_counts.items():
-            print(f"    - {district}: {count} samples")
-        
-        # Aggregate into exactly num_clients groups
-        districts_to_use = _aggregate_districts_into_clients(df_kaggle, num_clients)
+    # BINARY CLASSIFICATION FILTER REMOVED - USING ALL CROPS
+    # top_crops = df_kaggle['Crop'].value_counts().nlargest(2).index.tolist()
+    # print(f"  Filtering for binary classification: {top_crops}")
+    # df_kaggle = df_kaggle[df_kaggle['Crop'].isin(top_crops)].copy()
     
-    # Initialize GLOBAL LabelEncoder on ALL 16 crops
-    # (Each district will use a subset, but all use same global encoding)
+    # Update ALL_CROPS global variable for consistency
+    global ALL_CROPS
+    all_available_crops = sorted(df_kaggle['Crop'].unique().tolist())
+    ALL_CROPS = all_available_crops
+    print(f"  Using ALL available crops: {ALL_CROPS}")
+    print(f"  Total samples: {len(df_kaggle)}")
+    
+    # ---------------------------------------------------------
+    # 2. SELECT NUMERICAL FEATURES AND STANDARD SCALING
+    # ---------------------------------------------------------
+    print("\n[STEP 2] Selecting Numerical Features & Standard Scaling...")
+    
+    # Explicitly select features
+    X_raw = df_kaggle[FEATURE_COLUMNS].copy()
+    
+    # Handle non-numeric gracefully (though load_kaggle_dataset checks this usually)
+    for col in FEATURE_COLUMNS:
+        X_raw[col] = pd.to_numeric(X_raw[col], errors='coerce')
+    
+    # Drop NaNs before scaling
+    valid_indices = X_raw.dropna().index
+    X_raw = X_raw.loc[valid_indices]
+    df_kaggle = df_kaggle.loc[valid_indices] # Sync dataframe
+    
+    print(f"  Features selected: {FEATURE_COLUMNS}")
+    print("  Applying Global StandardScaler...")
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_raw.values)
+    
+    # ---------------------------------------------------------
+    # 3. LABEL ENCODE TARGET (CROP)
+    # ---------------------------------------------------------
+    print("\n[STEP 3] Label Encoding Target (Crop)...")
     le_global = LabelEncoder()
-    le_global.fit(ALL_CROPS)
+    y_encoded = le_global.fit_transform(df_kaggle['Crop'].values)
+    print(f"  Classes: {le_global.classes_}")
     
-    partitions = []
+    # ---------------------------------------------------------
+    # 4. SPLIT INTO 5 PARTITIONS DISTRICT WISE
+    # ---------------------------------------------------------
+    print(f"\n[STEP 4] Splitting into {num_clients} Partitions District-Wise...")
     
-    for i, district_group in enumerate(districts_to_use):
-        # Get data for this client (which may include multiple districts)
-        if use_synthetic:
-            df = generate_district_data(district_group)
+    # Get all unique districts
+    unique_districts = sorted(df_kaggle['District'].unique())
+    print(f"  Available Districts: {unique_districts}")
+    
+    if len(unique_districts) < num_clients:
+        print(f"  [WARNING] Only {len(unique_districts)} districts found, but {num_clients} clients requested.")
+        print("  Some clients might share districts or be empty.")
+    
+    # Verify we can split district-wise map
+    # We want strict mapping if possible.
+    # District -> Client ID
+    # If 5 districts and 5 clients, it's 1:1.
+    
+    partitions_raw = []
+    
+    # If we have exactly 5 districts and 5 clients, just map 1:1
+    if len(unique_districts) == num_clients:
+        district_groups = [[d] for d in unique_districts]
+    else:
+        # Fallback to aggregation logic if counts mismatch
+        district_groups = _aggregate_districts_into_clients(df_kaggle, num_clients)
+        
+    df_kaggle['target_encoded'] = y_encoded # Helper column
+    
+    # Iterate through groups to create raw partitions
+    for i in range(num_clients):
+        if i < len(district_groups):
+            d_list = district_groups[i]
+            # Filter data for these districts
+            indices = df_kaggle[df_kaggle['District'].isin(d_list)].index
+            
+            # Use LOC to get the CORRECT rows from X_scaled (since we dropped NaNs earlier, indices match)
+            # BUT X_scaled is a numpy array, so we need integer positions.
+            # df_kaggle indices might be non-sequential due to dropping.
+            # Best way: X_scaled corresponds to df_kaggle row-by-row.
+            
+            # Create a boolean mask
+            mask = df_kaggle['District'].isin(d_list).values
+            X_client = X_scaled[mask]
+            y_client = y_encoded[mask]
+            
+            dist_label = "+".join(d_list)
+            partitions_raw.append({
+                'X': X_client,
+                'y': y_client,
+                'district': dist_label,
+                'crops': sorted(df_kaggle.loc[mask, 'Crop'].unique())
+            })
         else:
-            # If district_group is a list (aggregated), combine data from all districts
-            if isinstance(district_group, list):
-                dfs = [df_kaggle[df_kaggle['District'] == d].copy() for d in district_group if d in df_kaggle['District'].unique()]
-                df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-            else:
-                df = df_kaggle[df_kaggle['District'] == district_group].copy()
-        
-        if len(df) == 0:
-            print(f"  [WARNING] No data for client {i+1}, skipping...")
-            continue
-        
-        # IDENTIFY CROPS IN THIS DISTRICT/CLIENT - MATCHES PAPER!
-        district_crops = sorted(df['Crop'].unique().tolist())
-        print(f"  Client {i+1} ({district_group}): {len(district_crops)} crops -> {district_crops}")
-        
-        # Extract ONLY the required feature columns (not all columns)
-        # Convert to numeric and handle any non-numeric values
-        df_features = df[FEATURE_COLUMNS].copy()
-        
-        # Convert all feature columns to numeric (coerce errors to NaN)
-        for col in FEATURE_COLUMNS:
-            df_features[col] = pd.to_numeric(df_features[col], errors='coerce')
-        
-        # Remove rows with NaN values
-        df_features = df_features.dropna()
-        
-        # Filter crops and labels accordingly
-        valid_indices = df_features.index
-        X = df_features.values  # Use only: N, P, K, pH, Rainfall, Temp
-        
-        # Use GLOBAL label encoding (all 16 crops for FedAvg compatibility)
-        y = le_global.transform(df.loc[valid_indices, 'Crop'].values)
+             partitions_raw.append({'X': np.array([]), 'y': np.array([]), 'district': 'None', 'crops': []})
+
+    # ---------------------------------------------------------
+    # 5. SMOTE SO THAT ALL 5 CLIENTS GET SAME SAMPLE SIZE (1000)
+    # ---------------------------------------------------------
+    TARGET_SAMPLES = 1000
+    print(f"\n[STEP 5] Balancing (SMOTE/Downsample) to {TARGET_SAMPLES} samples per client...")
+    
+    final_partitions = []
+    
+    for i, p in enumerate(partitions_raw):
+        X, y = p['X'], p['y']
         
         if len(X) == 0:
-            print(f"  [WARNING] No valid numeric data for client {i+1}, skipping...")
+            print(f"  Client {i+1}: Empty partition!")
             continue
+            
+        current_len = len(X)
         
-        # Scale features
-        scaler = StandardScaler()
-        X = scaler.fit_transform(X)
+        # Determine strategy
+        if current_len < TARGET_SAMPLES:
+            print(f"  Client {i+1} ({p['district']}): Upsampling {current_len} -> {TARGET_SAMPLES} (SMOTE)")
+            
+            # Prepare sampling strategy
+            # We want total = 1000. Preserve class ratio or balance equal?
+            # "SMOTE so that ... gets same sample size" implies dealing with imbalance too usually.
+            # Let's aim for balanced classes summing to 1000 if possible, or just scale up proportionally.
+            # Standard approach: Scale classes proportionally to reach total.
+            
+            try:
+                unique, counts = np.unique(y, return_counts=True)
+                scale = TARGET_SAMPLES / current_len
+                sampling_strategy = {cls: int(count * scale) for cls, count in zip(unique, counts)}
+                
+                # Adjust rounding errors to hit exactly 1000
+                current_sum = sum(sampling_strategy.values())
+                diff = TARGET_SAMPLES - current_sum
+                if diff > 0:
+                     # Add to majority class
+                     maj_class = unique[np.argmax(counts)]
+                     sampling_strategy[maj_class] += diff
+                
+                # Check k_neighbors
+                min_samples = min(counts)
+                k = min(5, min_samples - 1)
+                
+                if k < 1:
+                     # Random Over Sampler
+                     ros = RandomOverSampler(sampling_strategy=sampling_strategy, random_state=42)
+                     X_res, y_res = ros.fit_resample(X, y)
+                else:
+                     # SMOTE
+                     smote = SMOTE(sampling_strategy=sampling_strategy, k_neighbors=k, random_state=42)
+                     X_res, y_res = smote.fit_resample(X, y)
+                     
+            except Exception as e:
+                print(f"    [WARNING] SMOTE failed ({e}), falling back to RandomOverSampler")
+                # Simple fallback: Random oversample to total count
+                try:
+                    # ROS doesn't support "total samples" directly easily without strategy dict
+                    # Just reuse strategy logic or simple resample
+                    indices = np.random.choice(len(X), TARGET_SAMPLES, replace=True)
+                    X_res, y_res = X[indices], y[indices]
+                except:
+                    X_res, y_res = X, y # Keep original if all fails
+                    
+        elif current_len > TARGET_SAMPLES:
+            print(f"  Client {i+1} ({p['district']}): Downsampling {current_len} -> {TARGET_SAMPLES}")
+            indices = np.random.choice(len(X), TARGET_SAMPLES, replace=False)
+            X_res, y_res = X[indices], y[indices]
+            
+        else:
+            print(f"  Client {i+1} ({p['district']}): Already {TARGET_SAMPLES} samples")
+            X_res, y_res = X, y
+            
+        # ---------------------------------------------------------
+        # 6. RESHAPE FOR LSTM
+        # ---------------------------------------------------------
+        # Reshape to (Samples, TimeSteps, Features)
+        # Assuming TimeSteps=1 for this non-temporal data treated as sequence
+        # (N, 1, F)
         
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        # Split fit/test first? "Save partition for 5 clients" usually implies Train/Test sets within.
+        # Let's do 80/20 split THEN reshape.
         
-        # Reshape for LSTM: (samples, time_steps, features)
-        # We use 1 time step for simplicity as the paper suggests LSTM for its temporal capability 
-        # but the specific data described is point-in-time soil/weather.
+        X_train, X_test, y_train, y_test = train_test_split(X_res, y_res, test_size=0.2, random_state=42)
+        
         X_train = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
         X_test = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
         
-        # Create district label for reporting
-        if isinstance(district_group, list):
-            district_label = " + ".join(district_group)
-        else:
-            district_label = district_group
-        
-        partitions.append({
-            'X_train': torch.tensor(X_train, dtype=torch.float32),
-            'y_train': torch.tensor(y_train, dtype=torch.long),
-            'X_test': torch.tensor(X_test, dtype=torch.float32),
-            'y_test': torch.tensor(y_test, dtype=torch.long),
-            'district': district_label,
-            'crops': district_crops,  # Store district-specific crops
-            'crop_names': district_crops  # For use in test() function
+        # ---------------------------------------------------------
+        # 7. SAVE PARTITION
+        # ---------------------------------------------------------
+        final_partitions.append({
+             'X_train': torch.tensor(X_train, dtype=torch.float32),
+             'y_train': torch.tensor(y_train, dtype=torch.long),
+             'X_test': torch.tensor(X_test, dtype=torch.float32),
+             'y_test': torch.tensor(y_test, dtype=torch.long),
+             'district': p['district'],
+             'crops': p['crops']
         })
+        
+    print("\n[STEP 6 & 7] Reshaping for LSTM & Saving Partitions... DONE")
+    
+    return final_partitions, le_global
     
     return partitions, le_global
 if __name__ == "__main__":

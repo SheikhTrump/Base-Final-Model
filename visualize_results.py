@@ -51,10 +51,19 @@ data_encryption_ms = np.array(data['data_enc_time']) / 1000.0 # ms -> seconds
 network_latency_ms = np.array(data['network_latency'])
 
 # Local accuracies
-local_acc_dict = data['local_accuracies']
+local_acc_dict = data.get('local_accuracies', {})
 edge_servers = list(local_acc_dict.keys())
 local_accuracies = np.array(list(local_acc_dict.values()))
-local_colors = ['#2ecc71', '#27ae60', '#3498db', '#e74c3c'][:len(edge_servers)]
+local_colors = ['#2ecc71', '#27ae60', '#3498db', '#e74c3c', '#9b59b6', '#f1c40f'][:len(edge_servers)]
+
+# Sample counts
+sample_counts_dict = data.get('client_sample_counts', {})
+if sample_counts_dict:
+    # Ensure order matches edge_servers list
+    sample_counts = [sample_counts_dict.get(server, 0) for server in edge_servers]
+else:
+    # Fallback if missing
+    sample_counts = [0] * len(edge_servers)
 
 # Training time (approximate per round for plotting if needed)
 # Helper for plot 7/8
@@ -142,8 +151,7 @@ def create_comprehensive_plots():
     
     # ====== Plot 4: Data Distribution ======
     ax4 = fig.add_subplot(gs[1, 2])
-    sample_counts = [1253, 475, 352, 162]
-    colors_pie = ['#3498db', '#2ecc71', '#f39c12', '#e74c3c']
+    colors_pie = ['#3498db', '#2ecc71', '#f39c12', '#e74c3c', '#9b59b6', '#f1c40f'][:len(sample_counts)]
     wedges, texts, autotexts = ax4.pie(sample_counts, labels=edge_servers, autopct='%1.1f%%',
                                          colors=colors_pie, startangle=90, 
                                          textprops={'fontsize': 10, 'fontweight': 'bold'})
@@ -204,9 +212,9 @@ def create_comprehensive_plots():
         ['Avg Data Encryption', f'{avg_data_enc:.2f} ms', '~39.08 ms', f'✓ {39.08/avg_data_enc:.1f}x faster' if avg_data_enc > 0 else '-'],
         ['Network Latency/Round', f'{avg_network:.0f} ms', 'Simulated', '✓ Realistic'],
         [f'Total Training Time ({len(rounds)} rounds)', f'{total_duration:.2f} s', '-', '✓ Fast'],
-        ['Real Data Samples Used', '2,242', '4,513 available', '✓ Good coverage'],
+        ['Real Data Samples Used', f'{sum(sample_counts)}', 'Upsampled (SMOTE)', '✓ Balanced'],
         ['Target Crops Found', '6/6', 'All targets', '✓ Complete'],
-        ['Target Districts Used', f'{len(edge_servers)}/4', 'All targets', '✓ Balanced'],
+        ['Target Districts Used', f'{len(edge_servers)}/5', 'All targets', '✓ Balanced'],
     ]
     
     # Create table
@@ -450,10 +458,10 @@ def create_system_performance_plot():
       • Total Parameters: ~268.27 KB
     
     Data Configuration:
-      • Real Kaggle Dataset: 2,242 samples
-      • Train/Test Split: 1,792 / 450 (80/20)
+      • Real Kaggle Dataset: {sum(sample_counts)} samples (Balanced via SMOTE)
+      • Train/Test Split: 80/20
       • Features: 6 (N, P, K, pH, Rainfall, Temperature)
-      • Edge Servers: {len(edge_servers)} ({', '.join([s.split()[0] for s in edge_servers])})
+      • Edge Servers: {len(edge_servers)} (Districts mapped 1:1)
     
     Federated Learning:
       • Rounds: {len(rounds)}

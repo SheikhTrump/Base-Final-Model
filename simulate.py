@@ -3,7 +3,9 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import torch
 import time
 import flwr as fl
+import flwr.simulation 
 import numpy as np
+import pickle
 from typing import List, Tuple, Dict, Optional, Union
 from flwr.common import (
     Parameters,
@@ -78,7 +80,8 @@ class CustomSimStrategy(fl.server.strategy.FedAvg):
         self.round_history = []
         self.client_accuracies = {} # cid -> list of accuracies
         # Store initial parameters for size calculation
-        self.model = CropLSTM()
+        # Will be updated by run_simulation to match actual class count
+        self.model = CropLSTM(num_classes=2) 
         self.param_size_bytes = sum([p.nbytes for p in get_parameters(self.model)])
         
     def configure_fit(
@@ -246,6 +249,17 @@ def run_simulation():
     num_clients = sim_settings.get("num_clients", 4)
     num_rounds = sim_settings.get("num_rounds", 15)
     partitions, le = get_partitions(num_clients=num_clients)
+    
+    # Determine number of classes dynamically (Multi-class support)
+    num_classes = len(le.classes_)
+    print(f"\n[INFO] Model Configuration: Output Classes = {num_classes} ({', '.join(le.classes_)})")
+
+    # Track sample counts for reporting
+    client_sample_counts = {}
+    for i, p in enumerate(partitions):
+        count = len(p['X_train']) + len(p['X_test'])
+        client_sample_counts[f"Edge Server {i+1}"] = count
+        
     # Note: Device determination is handled inside FlowerClient
     
     # 2. Define Client Function for Simulation
@@ -253,10 +267,11 @@ def run_simulation():
     def client_fn_simulation(cid: str) -> fl.client.Client:
         # We pass "cpu" merely as a placeholder if client_fn requires it, 
         # but client.py's client_fn doesn't actually use the device arg for logic.
-        return client_fn(cid, partitions, "cpu")
+        # NOW: We must also pass num_classes to ensure local models are built correctly
+        return client_fn(cid, partitions, "cpu", num_classes=num_classes)
 
     # 3. Initialize Global Model (Server Side)
-    global_model = CropLSTM()
+    global_model = CropLSTM(num_classes=num_classes)
     global_parameters = ndarrays_to_parameters(get_parameters(global_model))
 
     # 4. Initialize Strategy
@@ -267,6 +282,10 @@ def run_simulation():
         min_available_clients=num_clients,
         initial_parameters=global_parameters,
     )
+    
+    # Store initial parameters for size calculation (Needs updated model size)
+    strategy.model = CropLSTM(num_classes=num_classes)
+    strategy.param_size_bytes = sum([p.nbytes for p in get_parameters(strategy.model)])
     
     start_time = time.time()
     
@@ -330,6 +349,19 @@ def run_simulation():
     print(f"  - Average: {avg_network:.4f} ms")
     print(f"  - Total (All Rounds): {strategy.total_network_latency:.2f} ms")
     
+    # Save Results for Visualization
+    print(f"\\nSaving simulation results to 'simulation_results.pkl'...")
+    results_data = {
+        "global_history": strategy.round_history,
+        "client_accuracies": strategy.client_accuracies,
+        "num_rounds": num_rounds,
+        "num_clients": num_clients
+    }
+    
+    with open("simulation_results.pkl", "wb") as f:
+        pickle.dump(results_data, f)
+    print("Results saved successfully.")
+    
     print(f"\\n>>> SYSTEM PERFORMANCE <<<")
     print(f"Total Model Simulation Time: {total_duration:.2f} seconds")
     
@@ -352,6 +384,7 @@ def run_simulation():
         "data_enc_time": [h["data_enc_time"] for h in history],
         "network_latency": [h["network_latency"] for h in history],
         "local_accuracies": {},
+        "client_sample_counts": client_sample_counts,
         "total_energy": total_energy,
         "total_time": total_duration,
         "metrics": {

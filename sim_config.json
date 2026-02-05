@@ -3,8 +3,8 @@
         "framework": "Flower Federated Learning",
         "tensorflow_version": "2.3.0",
         "cuda_version": "11.0",
-        "num_rounds": 15,
-        "num_clients": 4
+        "num_rounds": 20,
+        "num_clients": 5
     },
     "cloud_server": {
         "role": "global_aggregator",
@@ -53,6 +53,16 @@
             "processor": "Intel Xeon E5-26670 @2.90GHz OctaCore",
             "local_epochs": 5,
             "batch_size": 32
+        },
+        {
+            "client_id": 5,
+            "role": "edge_client",
+            "name": "Edge Server 5",
+            "ram": "16GB",
+            "storage": "1TB HDD",
+            "processor": "Intel Xeon E5-26670 @2.90GHz OctaCore",
+            "local_epochs": 5,
+            "batch_size": 32
         }
     ],
     "network": {
@@ -65,7 +75,7 @@
         "strategy": "FedAvg",
         "fraction_fit": 1.0,
         "fraction_evaluate": 1.0,
-        "min_fit_clients": 4,
-        "min_available_clients": 4
+        "min_fit_clients": 5,
+        "min_available_clients": 5
     }
 }

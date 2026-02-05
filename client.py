@@ -147,10 +147,10 @@ class FlowerClient(fl.client.NumPyClient):
             "data_enc_time": getattr(self, "last_data_enc_time", 0.0)
         }
 
-def client_fn(cid: str, partitions, device):
+def client_fn(cid: str, partitions, device, num_classes=2):
     """Create a Flower client representing a single organization."""
-    # Load model
-    net = CropLSTM()
+    # Load model with correct number of classes
+    net = CropLSTM(num_classes=num_classes)
 
     # Note: partitions is a list of dicts. cid is a string index.
     partition = partitions[int(cid)]

@@ -3,7 +3,7 @@ import torch.nn as nn
 from collections import OrderedDict
 
 class CropLSTM(nn.Module):
-    def __init__(self, input_size=6, hidden_size=64, num_layers=1, num_classes=16):
+    def __init__(self, input_size=6, hidden_size=64, num_layers=1, num_classes=2):
         super(CropLSTM, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
