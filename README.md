@@ -27,7 +27,7 @@ A federated learning implementation for distributed crop yield prediction across
 **FLyer** is a 4-tier federated learning system designed for real-time crop yield prediction in Agriculture 5.0. It implements distributed machine learning across edge servers in Western Maharashtra, India, with encrypted gradient transmission and federated averaging for privacy-preserving model training.
 
 ### Key Highlights:
-- ✓ Real Kaggle agricultural dataset (2,242 samples after filtering)
+- ✓ Real Kaggle agricultural dataset (4513 samples after filtering)
 - ✓ 4 edge servers (districts: Kolhapur, Satara, Solapur, Pune)
 - ✓ AES-256 encrypted gradient transmission
 - ✓ FedAvg algorithm for distributed learning
